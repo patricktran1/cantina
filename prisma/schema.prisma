@@ -1,0 +1,476 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum OrganizationRole {
+  OWNER
+  ADMIN
+  MEMBER
+  AUDITOR
+}
+
+enum MandateStatus {
+  ACTIVE
+  PAUSED
+  ARCHIVED
+}
+
+enum ResourceCategory {
+  INFERENCE
+  COMPUTE
+  STORAGE
+  DATABASE
+  SEARCH
+  BROWSER_AUTOMATION
+  VOICE
+  IMAGE
+  VIDEO
+  DATASET
+  SOFTWARE_TOOL
+  SPECIALIZED_AGENT
+}
+
+enum PurchaseRequestStatus {
+  CREATED
+  POLICY_EVALUATED
+  QUOTED
+  DECIDED
+  AWAITING_APPROVAL
+  AUTHORIZED
+  EXECUTING
+  VERIFYING
+  CLEARING
+  SETTLED
+  REJECTED
+  FAILED
+  DISPUTED
+}
+
+enum QuoteComplianceStatus {
+  COMPLIANT
+  NON_COMPLIANT
+}
+
+enum DecisionStatus {
+  APPROVED
+  AWAITING_HUMAN
+  REJECTED
+}
+
+enum AuthorizationStatus {
+  CREATED
+  HELD
+  CAPTURED
+  RELEASED
+  VOIDED
+  REFUNDED
+}
+
+enum JobStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum VerificationStatus {
+  PENDING
+  VERIFIED
+  PARTIAL
+  FAILED
+  DISPUTED
+}
+
+enum ClearingState {
+  DELIVERED
+  PARTIAL
+  FAILED
+  DISPUTED
+}
+
+enum SettlementStatus {
+  PENDING
+  SETTLED
+  REFUNDED
+  HELD_FOR_REVIEW
+}
+
+enum LedgerAccountType {
+  ASSET
+  LIABILITY
+  REVENUE
+  EXPENSE
+  EQUITY
+}
+
+enum LedgerEntryDirection {
+  DEBIT
+  CREDIT
+}
+
+enum LedgerTransactionStatus {
+  POSTED
+  REVERSED
+}
+
+enum LedgerTransactionType {
+  FUNDING
+  AUTHORIZATION_HOLD
+  CAPTURE
+  HOLD_RELEASE
+  REFUND
+  SUPPLIER_SETTLEMENT
+  PLATFORM_FEE
+  ADJUSTMENT
+}
+
+model User {
+  id              String               @id @default(cuid())
+  email           String               @unique
+  name            String?
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  memberships     OrganizationMember[]
+  auditEvents     AuditEvent[]         @relation("AuditActor")
+  approvalActions PurchaseDecision[]   @relation("DecisionApprover")
+}
+
+model Organization {
+  id                     String                  @id @default(cuid())
+  name                   String
+  slug                   String                  @unique
+  createdAt              DateTime                @default(now())
+  updatedAt              DateTime                @updatedAt
+  members                OrganizationMember[]
+  agents                 Agent[]
+  mandates               AgentMandate[]
+  purchaseRequests       PurchaseRequest[]
+  purchaseAuthorizations PurchaseAuthorization[]
+  ledgerAccounts         LedgerAccount[]
+  auditEvents            AuditEvent[]
+}
+
+model OrganizationMember {
+  id             String           @id @default(cuid())
+  userId         String
+  organizationId String
+  role           OrganizationRole @default(MEMBER)
+  createdAt      DateTime         @default(now())
+  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, organizationId])
+  @@index([organizationId])
+}
+
+model Agent {
+  id               String            @id @default(cuid())
+  organizationId   String
+  name             String
+  externalReference String?
+  active           Boolean           @default(true)
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  organization     Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  mandates         AgentMandate[]
+  purchaseRequests PurchaseRequest[]
+
+  @@index([organizationId])
+}
+
+model AgentMandate {
+  id                             String         @id @default(cuid())
+  organizationId                 String
+  agentId                        String
+  name                           String
+  objective                      String
+  status                         MandateStatus  @default(ACTIVE)
+  maximumPerJobMinor             Int
+  maximumPerDayMinor             Int
+  approvedCategories             ResourceCategory[]
+  approvedRegions                String[]
+  vendorAllowlist                String[]
+  customerDataAllowed            Boolean        @default(false)
+  minimumReliabilityBps          Int
+  requireUsDataResidency         Boolean        @default(false)
+  requireStrongPrivacyControls   Boolean        @default(false)
+  humanApprovalRequiredAboveMinor Int
+  version                        Int            @default(1)
+  createdAt                      DateTime       @default(now())
+  updatedAt                      DateTime       @updatedAt
+  organization                   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  agent                          Agent          @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  purchaseRequests               PurchaseRequest[]
+
+  @@index([organizationId, status])
+  @@index([agentId, status])
+}
+
+model Supplier {
+  id                    String          @id @default(cuid())
+  slug                  String          @unique
+  name                  String
+  description           String
+  active                Boolean         @default(true)
+  regions               String[]
+  reliabilityBps        Int
+  privacyScore           Int
+  complianceControls    String[]
+  completedJobs         Int             @default(0)
+  failedJobs            Int             @default(0)
+  reputationScoreBps    Int             @default(9000)
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
+  offers                SupplierOffer[]
+  quotes                SupplierQuote[]
+  jobs                  Job[]
+  clearingDecisions     ClearingDecision[]
+}
+
+model SupplierOffer {
+  id                        String           @id @default(cuid())
+  supplierId                String
+  category                  ResourceCategory
+  name                      String
+  description               String
+  basePriceMinor            Int
+  estimatedDurationSeconds  Int
+  regions                   String[]
+  active                    Boolean          @default(true)
+  metadata                  Json?
+  createdAt                 DateTime         @default(now())
+  updatedAt                 DateTime         @updatedAt
+  supplier                  Supplier         @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  quotes                    SupplierQuote[]
+
+  @@unique([supplierId, category, name])
+  @@index([category, active])
+}
+
+model PurchaseRequest {
+  id                         String                @id @default(cuid())
+  organizationId             String
+  agentId                    String
+  mandateId                  String
+  taskDescription            String
+  maximumBudgetMinor         Int
+  deadlineSeconds            Int
+  category                   ResourceCategory
+  allowedRegions             String[]
+  minimumReliabilityBps      Int
+  customerDataIncluded       Boolean               @default(false)
+  requireUsDataResidency     Boolean               @default(false)
+  requireStrongPrivacyControls Boolean             @default(false)
+  humanApprovalThresholdMinor Int
+  idempotencyKey             String                @unique
+  status                     PurchaseRequestStatus @default(CREATED)
+  rejectionReasons           Json?
+  createdAt                  DateTime              @default(now())
+  updatedAt                  DateTime              @updatedAt
+  organization               Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  agent                      Agent                 @relation(fields: [agentId], references: [id], onDelete: Restrict)
+  mandate                    AgentMandate          @relation(fields: [mandateId], references: [id], onDelete: Restrict)
+  quotes                     SupplierQuote[]
+  decision                   PurchaseDecision?
+  authorization              PurchaseAuthorization?
+  job                        Job?
+  clearingDecision           ClearingDecision?
+  auditEvents                AuditEvent[]
+
+  @@index([organizationId, createdAt])
+  @@index([status])
+}
+
+model SupplierQuote {
+  id                       String                  @id @default(cuid())
+  purchaseRequestId        String
+  supplierId               String
+  supplierOfferId          String
+  priceMinor               Int
+  estimatedDurationSeconds Int
+  reliabilityBps           Int
+  region                   String
+  privacyScore             Int
+  complianceStatus         QuoteComplianceStatus
+  complianceReasons        Json
+  score                     Int?
+  createdAt                 DateTime               @default(now())
+  purchaseRequest          PurchaseRequest         @relation(fields: [purchaseRequestId], references: [id], onDelete: Cascade)
+  supplier                 Supplier                @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  supplierOffer            SupplierOffer           @relation(fields: [supplierOfferId], references: [id], onDelete: Restrict)
+  selectedBy               PurchaseDecision?       @relation("SelectedQuote")
+
+  @@unique([purchaseRequestId, supplierId])
+  @@index([purchaseRequestId, complianceStatus])
+}
+
+model PurchaseDecision {
+  id                       String         @id @default(cuid())
+  purchaseRequestId        String         @unique
+  selectedQuoteId          String?        @unique
+  status                   DecisionStatus
+  rationale                String
+  policyEvaluation         Json
+  requiresHumanApproval    Boolean        @default(false)
+  approvedByUserId         String?
+  approvedAt               DateTime?
+  createdAt                DateTime       @default(now())
+  purchaseRequest          PurchaseRequest @relation(fields: [purchaseRequestId], references: [id], onDelete: Cascade)
+  selectedQuote            SupplierQuote? @relation("SelectedQuote", fields: [selectedQuoteId], references: [id], onDelete: Restrict)
+  approvedBy               User?          @relation("DecisionApprover", fields: [approvedByUserId], references: [id], onDelete: SetNull)
+}
+
+model PurchaseAuthorization {
+  id                 String              @id @default(cuid())
+  organizationId     String
+  purchaseRequestId  String              @unique
+  amountMinor        Int
+  currency           String              @default("USD")
+  status             AuthorizationStatus @default(CREATED)
+  idempotencyKey     String              @unique
+  holdTransactionId  String?             @unique
+  captureTransactionId String?           @unique
+  releaseTransactionId String?           @unique
+  refundTransactionId String?            @unique
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  organization       Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  purchaseRequest    PurchaseRequest      @relation(fields: [purchaseRequestId], references: [id], onDelete: Cascade)
+}
+
+model Job {
+  id                 String       @id @default(cuid())
+  purchaseRequestId  String       @unique
+  supplierId         String
+  status             JobStatus    @default(QUEUED)
+  progressPercent    Int          @default(0)
+  startedAt          DateTime?
+  completedAt        DateTime?
+  failureReason      String?
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+  purchaseRequest    PurchaseRequest @relation(fields: [purchaseRequestId], references: [id], onDelete: Cascade)
+  supplier           Supplier     @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  outputs            JobOutput[]
+  deliveryEvidence   DeliveryEvidence[]
+}
+
+model JobOutput {
+  id          String   @id @default(cuid())
+  jobId       String
+  sequence    Int      @default(0)
+  contentType String   @default("application/json")
+  content     Json
+  checksum    String
+  createdAt   DateTime @default(now())
+  job         Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, sequence])
+}
+
+model DeliveryEvidence {
+  id                 String             @id @default(cuid())
+  jobId              String
+  status             VerificationStatus
+  evidenceType       String
+  checks             Json
+  measuredItems      Int
+  expectedItems      Int
+  checksumVerified   Boolean
+  createdAt          DateTime           @default(now())
+  job                Job                @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId, createdAt])
+}
+
+model ClearingDecision {
+  id                    String           @id @default(cuid())
+  purchaseRequestId     String           @unique
+  supplierId            String
+  state                 ClearingState
+  settlementStatus      SettlementStatus
+  authorizedAmountMinor Int
+  settledAmountMinor    Int
+  refundedAmountMinor   Int
+  platformFeeMinor      Int
+  rationale             String
+  createdAt             DateTime         @default(now())
+  purchaseRequest       PurchaseRequest  @relation(fields: [purchaseRequestId], references: [id], onDelete: Cascade)
+  supplier              Supplier         @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+}
+
+model LedgerAccount {
+  id             String            @id @default(cuid())
+  organizationId String?
+  code           String            @unique
+  name           String
+  type           LedgerAccountType
+  currency       String            @default("USD")
+  active         Boolean           @default(true)
+  createdAt      DateTime          @default(now())
+  organization   Organization?     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  entries        LedgerEntry[]
+
+  @@index([organizationId])
+}
+
+model LedgerTransaction {
+  id             String                  @id @default(cuid())
+  type           LedgerTransactionType
+  status         LedgerTransactionStatus @default(POSTED)
+  idempotencyKey String                  @unique
+  referenceType  String
+  referenceId    String
+  description    String
+  currency       String                  @default("USD")
+  createdAt      DateTime                @default(now())
+  reversalOfId   String?                 @unique
+  reversalOf     LedgerTransaction?      @relation("LedgerReversal", fields: [reversalOfId], references: [id])
+  reversedBy     LedgerTransaction?      @relation("LedgerReversal")
+  entries        LedgerEntry[]
+
+  @@index([referenceType, referenceId])
+  @@index([createdAt])
+}
+
+model LedgerEntry {
+  id                  String               @id @default(cuid())
+  ledgerTransactionId String
+  ledgerAccountId     String
+  direction           LedgerEntryDirection
+  amountMinor         Int
+  memo                String?
+  createdAt           DateTime             @default(now())
+  ledgerTransaction   LedgerTransaction    @relation(fields: [ledgerTransactionId], references: [id], onDelete: Restrict)
+  ledgerAccount       LedgerAccount        @relation(fields: [ledgerAccountId], references: [id], onDelete: Restrict)
+
+  @@index([ledgerTransactionId])
+  @@index([ledgerAccountId, createdAt])
+}
+
+model AuditEvent {
+  id                String           @id @default(cuid())
+  organizationId    String
+  purchaseRequestId String?
+  actorUserId       String?
+  eventType         String
+  entityType        String
+  entityId          String
+  payload           Json
+  sequence          BigInt
+  previousHash      String?
+  eventHash         String
+  createdAt         DateTime         @default(now())
+  organization      Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  purchaseRequest   PurchaseRequest? @relation(fields: [purchaseRequestId], references: [id], onDelete: Cascade)
+  actorUser         User?            @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, sequence])
+  @@index([organizationId, createdAt])
+  @@index([purchaseRequestId, createdAt])
+}
