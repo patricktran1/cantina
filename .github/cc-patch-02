@@ -1,0 +1,184 @@
+it a/src/domain/ledger/ledger.test.ts b/src/domain/ledger/ledger.test.ts
+index 033da29..b45fd93 100644
+--- a/src/domain/ledger/ledger.test.ts
++++ b/src/domain/ledger/ledger.test.ts
+@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
+ import {
+   assertBalanced,
+   createAuthorizationHold,
++  createCapture,
+   createDeliveredCapture,
++  createHoldRelease,
+   createInitialFunding,
+   createSupplierSettlement,
+ } from "./ledger";
+@@ -22,7 +24,9 @@ describe("double-entry ledger", () => {
+     createInitialFunding({ organizationSlug: "cantina-labs", amountMinor: 100_000, referenceId: "org", idempotencyKey: "fund" }),
+     createAuthorizationHold({ organizationSlug: "cantina-labs", amountMinor: 26, referenceId: "request", idempotencyKey: "hold" }),
+     createDeliveredCapture({ organizationSlug: "cantina-labs", authorizedAmountMinor: 26, platformFeeMinor: 2, referenceId: "request", idempotencyKey: "capture" }),
+-    createSupplierSettlement({ amountMinor: 24, referenceId: "request", idempotencyKey: "settle" }),
++    createCapture({ organizationSlug: "cantina-labs", captureAmountMinor: 18, platformFeeMinor: 1, referenceId: "request", idempotencyKey: "partial-capture" }),
++    createHoldRelease({ organizationSlug: "cantina-labs", amountMinor: 8, referenceId: "request", idempotencyKey: "release" }),
++    createSupplierSettlement({ amountMinor: 17, referenceId: "request", idempotencyKey: "settle" }),
+   ])("balances $type", (draft) => {
+     expect(() => assertBalanced(draft.postings)).not.toThrow();
+     expect(totals(draft.postings).DEBIT).toBe(totals(draft.postings).CREDIT);
+diff --git a/src/domain/ledger/ledger.ts b/src/domain/ledger/ledger.ts
+index bd67c0b..d0957bf 100644
+--- a/src/domain/ledger/ledger.ts
++++ b/src/domain/ledger/ledger.ts
+@@ -42,36 +42,55 @@ export function createAuthorizationHold(args: {
+   };
+ }
+ 
+-export function createDeliveredCapture(args: {
++export function createCapture(args: {
+   organizationSlug: string;
+-  authorizedAmountMinor: number;
++  captureAmountMinor: number;
+   platformFeeMinor: number;
+   referenceId: string;
+   idempotencyKey: string;
+ }): LedgerTransactionDraft {
+-  const supplierAmountMinor = args.authorizedAmountMinor - args.platformFeeMinor;
++  const supplierAmountMinor = args.captureAmountMinor - args.platformFeeMinor;
+   if (supplierAmountMinor <= 0) {
+     throw new Error("Supplier settlement amount must be positive.");
+   }
++  const postings: LedgerPosting[] = [
++    {
++      accountCode: `ORG:${args.organizationSlug}:CUSTOMER_HELD`,
++      direction: "DEBIT",
++      amountMinor: args.captureAmountMinor,
++    },
++    { accountCode: "SYSTEM:SUPPLIER_PAYABLE", direction: "CREDIT", amountMinor: supplierAmountMinor },
++  ];
++  if (args.platformFeeMinor > 0) {
++    postings.push({ accountCode: "SYSTEM:PLATFORM_REVENUE", direction: "CREDIT", amountMinor: args.platformFeeMinor });
++  }
+   return {
+     type: "CAPTURE",
+     idempotencyKey: args.idempotencyKey,
+     referenceType: "purchase_request",
+     referenceId: args.referenceId,
+-    description: "Capture held funds after verified delivery.",
++    description: "Capture held funds after delivery verification.",
+     currency: "USD",
+-    postings: [
+-      {
+-        accountCode: `ORG:${args.organizationSlug}:CUSTOMER_HELD`,
+-        direction: "DEBIT",
+-        amountMinor: args.authorizedAmountMinor,
+-      },
+-      { accountCode: "SYSTEM:SUPPLIER_PAYABLE", direction: "CREDIT", amountMinor: supplierAmountMinor },
+-      { accountCode: "SYSTEM:PLATFORM_REVENUE", direction: "CREDIT", amountMinor: args.platformFeeMinor },
+-    ],
++    postings,
+   };
+ }
+ 
++export function createDeliveredCapture(args: {
++  organizationSlug: string;
++  authorizedAmountMinor: number;
++  platformFeeMinor: number;
++  referenceId: string;
++  idempotencyKey: string;
++}): LedgerTransactionDraft {
++  return createCapture({
++    organizationSlug: args.organizationSlug,
++    captureAmountMinor: args.authorizedAmountMinor,
++    platformFeeMinor: args.platformFeeMinor,
++    referenceId: args.referenceId,
++    idempotencyKey: args.idempotencyKey,
++  });
++}
++
+ export function createSupplierSettlement(args: {
+   amountMinor: number;
+   referenceId: string;
+diff --git a/src/domain/procurement/policy-engine.test.ts b/src/domain/procurement/policy-engine.test.ts
+index 32807c0..5f08656 100644
+--- a/src/domain/procurement/policy-engine.test.ts
++++ b/src/domain/procurement/policy-engine.test.ts
+@@ -28,6 +28,7 @@ const request: PurchaseRequestInput = {
+   requireUsDataResidency: true,
+   requireStrongPrivacyControls: false,
+   humanApprovalThresholdMinor: 2_500,
++  simulatedOutcome: "DELIVERED",
+ };
+ 
+ it("accepts a request inside its mandate", () => {
+diff --git a/src/domain/procurement/schemas.ts b/src/domain/procurement/schemas.ts
+index 065a0b8..d145c55 100644
+--- a/src/domain/procurement/schemas.ts
++++ b/src/domain/procurement/schemas.ts
+@@ -1,5 +1,6 @@
+ import { z } from "zod";
+ import { resourceCategories } from "./types";
++import { simulatedDeliveryOutcomes } from "@/domain/clearing/settlement-plan";
+ 
+ export const purchaseRequestSchema = z.object({
+   taskDescription: z.string().trim().min(10).max(10_000),
+@@ -12,6 +13,7 @@ export const purchaseRequestSchema = z.object({
+   requireUsDataResidency: z.boolean(),
+   requireStrongPrivacyControls: z.boolean(),
+   humanApprovalThresholdMinor: z.coerce.number().int().nonnegative().max(100_000_000),
++  simulatedOutcome: z.enum(simulatedDeliveryOutcomes).default("DELIVERED"),
+   idempotencyKey: z.string().trim().min(8).max(200),
+ });
+ 
+diff --git a/src/domain/procurement/selection.test.ts b/src/domain/procurement/selection.test.ts
+index 3d75125..ec2c236 100644
+--- a/src/domain/procurement/selection.test.ts
++++ b/src/domain/procurement/selection.test.ts
+@@ -28,6 +28,7 @@ const request: PurchaseRequestInput = {
+   requireUsDataResidency: true,
+   requireStrongPrivacyControls: false,
+   humanApprovalThresholdMinor: 2_500,
++  simulatedOutcome: "DELIVERED",
+ };
+ 
+ const suppliers: SupplierCandidate[] = [
+diff --git a/src/domain/procurement/types.ts b/src/domain/procurement/types.ts
+index 66b8ed2..2fb86f8 100644
+--- a/src/domain/procurement/types.ts
++++ b/src/domain/procurement/types.ts
+@@ -1,3 +1,5 @@
++import type { SimulatedDeliveryOutcome } from "@/domain/clearing/settlement-plan";
++
+ export const resourceCategories = [
+   "INFERENCE",
+   "COMPUTE",
+@@ -41,6 +43,7 @@ export interface PurchaseRequestInput {
+   requireUsDataResidency: boolean;
+   requireStrongPrivacyControls: boolean;
+   humanApprovalThresholdMinor: number;
++  simulatedOutcome: SimulatedDeliveryOutcome;
+ }
+ 
+ export interface SupplierCandidate {
+diff --git a/src/infrastructure/persistence/database-store.ts b/src/infrastructure/persistence/database-store.ts
+index 2d440df..cea4329 100644
+--- a/src/infrastructure/persistence/database-store.ts
++++ b/src/infrastructure/persistence/database-store.ts
+@@ -1,9 +1,11 @@
+ /* eslint-disable @typescript-eslint/no-explicit-any */
+ import type { Prisma } from "@/generated/prisma/client";
+-import { executeMockJob, verifyMockDelivery } from "@/domain/execution/mock-executor";
++import { applySimulatedDeliveryOutcome, executeMockJob, verifyMockDelivery } from "@/domain/execution/mock-executor";
++import { createSettlementPlan, type SimulatedDeliveryOutcome } from "@/domain/clearing/settlement-plan";
+ import {
+   createAuthorizationHold,
+-  createDeliveredCapture,
++  createCapture,
++  createHoldRelease,
+   createSupplierSettlement,
+ } from "@/domain/ledger/ledger";
+ import { evaluateRequestAgainstMandate } from "@/domain/procurement/policy-engine";
+@@ -128,6 +130,7 @@ function mapPurchase(record: NonNullable<Awaited<ReturnType<typeof purchaseRecor
+     minimumReliabilityBps: record.minimumReliabilityBps,
+     requireUsDataResidency: record.requireUsDataResidency,
+     requireStrongPrivacyControls: record.requireStrongPrivacyControls,
++    simulatedOutcome: record.simulatedOutcome as SimulatedDeliveryOutcome,
+     status: record.status,
+     create 
