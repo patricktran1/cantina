@@ -1,0 +1,45 @@
+nor: selection.selected.priceMinor,
+-    refundedAmountMinor: 0,
+-    platformFeeMinor,
+-    rationale: "All expected output items were present and the delivery checksum matched. Full payment released.",
++    settledAmountMinor: plan.captureAmountMinor,
++    refundedAmountMinor: plan.refundedAmountMinor,
++    platformFeeMinor: plan.platformFeeMinor,
++    rationale: plan.rationale,
+   };
+-  transition(purchase, "SETTLED");
++  transition(purchase, plan.finalPurchaseStatus);
++
+   const supplier = state.suppliers.find((item) => item.id === selection.selected?.supplierId);
+-  if (supplier) supplier.completedJobs += 1;
++  if (supplier && (plan.state === "DELIVERED" || plan.state === "PARTIAL")) supplier.completedJobs += 1;
++  if (supplier && plan.state === "FAILED") supplier.failedJobs += 1;
++
+   appendAudit(state, {
+     eventType: "CLEARING_DECISION_ISSUED",
+     entityType: "clearing_decision",
+@@ -588,11 +613,22 @@ export function createAndRunPurchase(input: ValidatedPurchaseRequest): DemoPurch
+     payload: purchase.clearing,
+   });
+   appendAudit(state, {
+-    eventType: "PAYMENT_SETTLED",
++    eventType: plan.state === "DISPUTED"
++      ? "FUNDS_HELD_FOR_REVIEW"
++      : plan.state === "FAILED"
++        ? "AUTHORIZATION_RELEASED"
++        : plan.state === "PARTIAL"
++          ? "PAYMENT_PARTIALLY_SETTLED"
++          : "PAYMENT_SETTLED",
+     entityType: "ledger_transaction",
+     entityId: purchase.id,
+     purchaseRequestId: purchase.id,
+-    payload: { supplierSettlementMinor, platformFeeMinor },
++    payload: {
++      captureAmountMinor: plan.captureAmountMinor,
++      releaseAmountMinor: plan.releaseAmountMinor,
++      supplierSettlementMinor: plan.supplierSettlementMinor,
++      platformFeeMinor: plan.platformFeeMinor,
++    },
+   });
+ 
+   return structuredClone(purchase);
