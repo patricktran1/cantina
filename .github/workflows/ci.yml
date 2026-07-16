@@ -1,56 +1,18 @@
-name: CI Repair
+name: CI
 
 on:
+  push:
+    branches: [main]
   pull_request:
 
-permissions:
-  contents: write
-
 jobs:
-  repair-and-verify:
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.ref }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Apply isolated Prisma type fixes
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          demo = Path("src/lib/demo-store.ts")
-          text = demo.read_text()
-          text = text.replace(
-              'status: "VERIFIED" | "PARTIAL" | "FAILED";',
-              'status: "VERIFIED" | "PARTIAL" | "FAILED" | "PENDING";',
-          )
-          text = text.replace(
-              'settlementStatus: "SETTLED" | "REFUNDED" | "HELD_FOR_REVIEW";',
-              'settlementStatus: "SETTLED" | "REFUNDED" | "HELD_FOR_REVIEW" | "PENDING";',
-          )
-          demo.write_text(text)
-
-          bootstrap = Path("src/infrastructure/persistence/prisma/bootstrap.ts")
-          text = bootstrap.read_text()
-          text = text.replace(
-              '  ] as const;\n\n  for (const supplierInput of suppliers) {',
-              '  ];\n\n  for (const supplierInput of suppliers) {',
-              1,
-          )
-          bootstrap.write_text(text)
-          PY
-      - name: Commit isolated type fixes
-        run: |
-          git config user.name "Cantina Build Bot"
-          git config user.email "actions@users.noreply.github.com"
-          git add src/lib/demo-store.ts src/infrastructure/persistence/prisma/bootstrap.ts
-          if ! git diff --cached --quiet; then
-            git commit -m "fix: narrow persisted workflow enum types"
-            git push origin HEAD:${{ github.event.pull_request.head.ref }}
-          fi
       - run: npm install
       - run: npm audit --audit-level=high
       - run: npm run lint
