@@ -122,7 +122,7 @@ export interface DemoPurchase {
     checksum: string;
   };
   verification?: {
-    status: "VERIFIED" | "PARTIAL" | "FAILED";
+    status: "VERIFIED" | "PARTIAL" | "FAILED" | "PENDING";
     measuredItems: number;
     expectedItems: number;
     checksumVerified: boolean;
@@ -130,7 +130,7 @@ export interface DemoPurchase {
   };
   clearing?: {
     state: "DELIVERED" | "PARTIAL" | "FAILED" | "DISPUTED";
-    settlementStatus: "SETTLED" | "REFUNDED" | "HELD_FOR_REVIEW";
+    settlementStatus: "SETTLED" | "REFUNDED" | "HELD_FOR_REVIEW" | "PENDING";
     authorizedAmountMinor: number;
     settledAmountMinor: number;
     refundedAmountMinor: number;
