@@ -1,0 +1,28 @@
+name: Final clean complete clearing branch
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  clean:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - name: Restore committed Prisma fallback and remove cleanup workflow
+        run: |
+          git fetch origin main
+          rm -rf src/generated/prisma
+          git checkout origin/main -- src/generated/prisma
+          rm -f .github/workflows/clean-complete-clearing.yml
+          git config user.name "Cantina Build Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "chore: restore minimal Prisma fallback"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
