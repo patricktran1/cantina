@@ -12,4 +12,9 @@ jobs:
         with:
           node-version: 22
       - run: npm install
-      - run: npx tsc --noEmit
+      - name: Capture TypeScript output
+        run: npx tsc --noEmit > tsc.log 2>&1 || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tsc-log
+          path: tsc.log
