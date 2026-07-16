@@ -21,7 +21,19 @@ jobs:
       - name: Apply feature patch
         run: |
           cat .github/cc-patch-* > /tmp/complete-clearing.patch
-          patch --batch --forward --fuzz=3 -p1 < /tmp/complete-clearing.patch
+          set +e
+          patch --batch --forward --fuzz=3 -p1 < /tmp/complete-clearing.patch > /tmp/patch.log 2>&1
+          echo $? > /tmp/patch-status
+          set -e
+          cat /tmp/patch.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: complete-clearing-patch-log
+          path: |
+            /tmp/patch.log
+            /tmp/patch-status
+      - name: Require clean patch
+        run: test "$(cat /tmp/patch-status)" = "0"
       - run: npm install
       - run: npm audit --audit-level=high
       - run: npm run lint
