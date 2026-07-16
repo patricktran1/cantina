@@ -1,4 +1,4 @@
-name: Apply complete clearing feature
+name: Clean complete clearing branch
 
 on:
   pull_request:
@@ -8,49 +8,22 @@ permissions:
   contents: write
 
 jobs:
-  apply-and-verify:
+  clean:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - name: Apply feature patch
+      - name: Remove publishing scaffolding and generated output
         run: |
-          cat .github/cc-patch-* > /tmp/complete-clearing.patch
-          set +e
-          patch --batch --forward --fuzz=3 -p1 < /tmp/complete-clearing.patch > /tmp/patch.log 2>&1
-          patch_status=$?
-          set -e
-          cat /tmp/patch.log
-          if [ "$patch_status" -ne 0 ]; then
-            rejects="$(find . -name '*.rej' -print)"
-            test "$rejects" = "./README.md.rej"
-          fi
-          python - <<'PY'
-          from pathlib import Path
-          path = Path("README.md")
-          text = path.read_text()
-          old = "Only the `DELIVERED` happy path is wired into the current UI workflow. The other states and posting primitives are the next implementation checkpoint."
-          new = "All four clearing states are wired into the purchase demo. The form includes an explicit simulation control so each financial path can be exercised and audited without relying on random failures."
-          if old not in text:
-              raise SystemExit("Expected README clearing checkpoint sentence was not found.")
-          path.write_text(text.replace(old, new))
-          PY
-          rm -f README.md.rej README.md.orig
-      - run: npm install
-      - run: npm audit --audit-level=high
-      - run: npm run lint
-      - run: npm test
-      - run: npx tsc --noEmit
-      - run: npm run build
-      - name: Commit verified feature
-        run: |
+          git fetch origin main
+          git checkout origin/main -- src/generated/prisma
+          rm -f .github/cc-patch-*
+          rm -f .github/workflows/apply-complete-clearing.yml
+          find docs src -name '*.orig' -delete
           git config user.name "Cantina Build Bot"
           git config user.email "actions@users.noreply.github.com"
-          git add README.md docs prisma src
-          git commit -m "feat: complete clearing and settlement outcomes"
+          git add -A
+          git commit -m "chore: clean complete clearing branch artifacts"
           git push origin HEAD:${{ github.event.pull_request.head.ref }}
