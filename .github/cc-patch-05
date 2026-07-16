@@ -1,0 +1,196 @@
+0,
+-      category: "INFERENCE" as const,
+-      allowedRegions: ["us-west"],
+-      minimumReliabilityBps: 9_900,
+-      customerDataIncluded: false,
+-      requireUsDataResidency: true,
+-      requireStrongPrivacyControls: false,
+-      humanApprovalThresholdMinor: 2_500,
+-      idempotencyKey: "test-purchase-idempotent",
+-    };
+-    const first = createAndRunPurchase(input);
+-    const second = createAndRunPurchase(input);
++    const purchaseInput = input("DELIVERED", "test-purchase-idempotent");
++    const first = createAndRunPurchase(purchaseInput);
++    const second = createAndRunPurchase(purchaseInput);
+     expect(second.id).toBe(first.id);
+     expect(getDashboardData().totalSpendMinor).toBe(26);
+   });
+diff --git a/src/lib/demo-store.ts b/src/lib/demo-store.ts
+index 1e26e3c..c2ee941 100644
+--- a/src/lib/demo-store.ts
++++ b/src/lib/demo-store.ts
+@@ -1,9 +1,11 @@
+ import { createHash, randomUUID } from "node:crypto";
+-import { executeMockJob, verifyMockDelivery } from "@/domain/execution/mock-executor";
++import { applySimulatedDeliveryOutcome, executeMockJob, verifyMockDelivery } from "@/domain/execution/mock-executor";
++import { createSettlementPlan, type SimulatedDeliveryOutcome } from "@/domain/clearing/settlement-plan";
+ import {
+   assertBalanced,
+   createAuthorizationHold,
+-  createDeliveredCapture,
++  createCapture,
++  createHoldRelease,
+   createInitialFunding,
+   createSupplierSettlement,
+ } from "@/domain/ledger/ledger";
+@@ -80,6 +82,7 @@ export interface DemoPurchase {
+   minimumReliabilityBps: number;
+   requireUsDataResidency: boolean;
+   requireStrongPrivacyControls: boolean;
++  simulatedOutcome: SimulatedDeliveryOutcome;
+   status:
+     | "CREATED"
+     | "POLICY_EVALUATED"
+@@ -107,7 +110,7 @@ export interface DemoPurchase {
+   authorization?: {
+     id: string;
+     amountMinor: number;
+-    status: "HELD" | "CAPTURED";
++    status: "HELD" | "CAPTURED" | "RELEASED";
+   };
+   job?: {
+     id: string;
+@@ -122,7 +125,7 @@ export interface DemoPurchase {
+     checksum: string;
+   };
+   verification?: {
+-    status: "VERIFIED" | "PARTIAL" | "FAILED" | "PENDING";
++    status: "VERIFIED" | "PARTIAL" | "FAILED" | "DISPUTED" | "PENDING";
+     measuredItems: number;
+     expectedItems: number;
+     checksumVerified: boolean;
+@@ -337,6 +340,7 @@ export function createAndRunPurchase(input: ValidatedPurchaseRequest): DemoPurch
+     requireUsDataResidency: input.requireUsDataResidency,
+     requireStrongPrivacyControls: input.requireStrongPrivacyControls,
+     humanApprovalThresholdMinor: input.humanApprovalThresholdMinor,
++    simulatedOutcome: input.simulatedOutcome,
+   };
+ 
+   const purchase: DemoPurchase = {
+@@ -350,6 +354,7 @@ export function createAndRunPurchase(input: ValidatedPurchaseRequest): DemoPurch
+     minimumReliabilityBps: input.minimumReliabilityBps,
+     requireUsDataResidency: input.requireUsDataResidency,
+     requireStrongPrivacyControls: input.requireStrongPrivacyControls,
++    simulatedOutcome: input.simulatedOutcome,
+     status: "CREATED",
+     createdAt: now(),
+     mandateEvaluation: { compliant: false, checks: [] },
+@@ -368,7 +373,7 @@ export function createAndRunPurchase(input: ValidatedPurchaseRequest): DemoPurch
+     entityType: "purchase_request",
+     entityId: purchase.id,
+     purchaseRequestId: purchase.id,
+-    payload: { taskDescription: purchase.taskDescription, maximumBudgetMinor: purchase.maximumBudgetMinor },
++    payload: { taskDescription: purchase.taskDescription, maximumBudgetMinor: purchase.maximumBudgetMinor, simulatedOutcome: purchase.simulatedOutcome },
+   });
+ 
+   purchase.mandateEvaluation = evaluateRequestAgainstMandate({
+@@ -514,10 +519,11 @@ export function createAndRunPurchase(input: ValidatedPurchaseRequest): DemoPurch
+     purchaseRequestId: purchase.id,
+     payload: { supplierName: selection.selected.supplierName },
+   });
+-  const result = executeMockJob({ taskDescription: purchase.taskDescription, supplierName: selection.selected.supplierName });
++  const rawResult = executeMockJob({ taskDescription: purchase.taskDescription, supplierName: selection.selected.supplierName });
++  const result = applySimulatedDeliveryOutcome(rawResult, purchase.simulatedOutcome);
+   purchase.job = {
+     id: randomUUID(),
+-    status: "COMPLETED",
++    status: purchase.simulatedOutcome === "FAILED" ? "FAILED" : "COMPLETED",
+     progressPercent: 100,
+     supplierName: selection.selected.supplierName,
+     output: result.output,
+@@ -525,14 +531,14 @@ export function createAndRunPurchase(input: ValidatedPurchaseRequest): DemoPurch
+   };
+   transition(purchase, "VERIFYING");
+   appendAudit(state, {
+-    eventType: "JOB_COMPLETED",
++    eventType: purchase.job.status === "FAILED" ? "JOB_FAILED" : "JOB_COMPLETED",
+     entityType: "job",
+     entityId: purchase.job.id,
+     purchaseRequestId: purchase.id,
+-    payload: { itemCount: result.output.items.length, checksum: result.checksum },
++    payload: { itemCount: result.output.items.length, checksum: result.checksum, simulatedOutcome: purchase.simulatedOutcome },
+   });
+ 
+-  purchase.verification = verifyMockDelivery(result);
++  purchase.verification = verifyMockDelivery(result, { disputed: purchase.simulatedOutcome === "DISPUTED" });
+   appendAudit(state, {
+     eventType: "OUTPUT_VERIFIED",
+     entityType: "delivery_evidence",
+@@ -542,44 +548,63 @@ export function createAndRunPurchase(input: ValidatedPurchaseRequest): DemoPurch
+   });
+ 
+   transition(purchase, "CLEARING");
+-  if (purchase.verification.status !== "VERIFIED") {
+-    transition(purchase, purchase.verification.status === "PARTIAL" ? "DISPUTED" : "FAILED");
+-    return structuredClone(purchase);
++  const plan = createSettlementPlan({
++    outcome: purchase.simulatedOutcome,
++    authorizedAmountMinor: selection.selected.priceMinor,
++    measuredItems: purchase.verification.measuredItems,
++    expectedItems: purchase.verification.expectedItems,
++  });
++
++  if (plan.captureAmountMinor > 0) {
++    postLedgerTransaction(
++      state,
++      createCapture({
++        organizationSlug: state.organization.slug,
++        captureAmountMinor: plan.captureAmountMinor,
++        platformFeeMinor: plan.platformFeeMinor,
++        referenceId: purchase.id,
++        idempotencyKey: `purchase:${purchase.id}:capture`,
++      }),
++    );
++  }
++  if (plan.releaseAmountMinor > 0) {
++    postLedgerTransaction(
++      state,
++      createHoldRelease({
++        organizationSlug: state.organization.slug,
++        amountMinor: plan.releaseAmountMinor,
++        referenceId: purchase.id,
++        idempotencyKey: `purchase:${purchase.id}:hold-release`,
++      }),
++    );
++  }
++  if (plan.supplierSettlementMinor > 0) {
++    postLedgerTransaction(
++      state,
++      createSupplierSettlement({
++        amountMinor: plan.supplierSettlementMinor,
++        referenceId: purchase.id,
++        idempotencyKey: `purchase:${purchase.id}:supplier-settlement`,
++      }),
++    );
+   }
+ 
+-  const platformFeeMinor = Math.max(1, Math.ceil(selection.selected.priceMinor * 0.05));
+-  const supplierSettlementMinor = selection.selected.priceMinor - platformFeeMinor;
+-  postLedgerTransaction(
+-    state,
+-    createDeliveredCapture({
+-      organizationSlug: state.organization.slug,
+-      authorizedAmountMinor: selection.selected.priceMinor,
+-      platformFeeMinor,
+-      referenceId: purchase.id,
+-      idempotencyKey: `purchase:${purchase.id}:capture`,
+-    }),
+-  );
+-  postLedgerTransaction(
+-    state,
+-    createSupplierSettlement({
+-      amountMinor: supplierSettlementMinor,
+-      referenceId: purchase.id,
+-      idempotencyKey: `purchase:${purchase.id}:supplier-settlement`,
+-    }),
+-  );
+-  purchase.authorization.status = "CAPTURED";
++  purchase.authorization.status = plan.authorizationStatus;
+   purchase.clearing = {
+-    state: "DELIVERED",
+-    settlementStatus: "SETTLED",
++    state: plan.state,
++    settlementStatus: plan.settlementStatus,
+     authorizedAmountMinor: selection.selected.priceMinor,
+-    settledAmountMi
