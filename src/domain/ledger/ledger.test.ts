@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   assertBalanced,
   createAuthorizationHold,
+  createCapture,
   createDeliveredCapture,
+  createHoldRelease,
   createInitialFunding,
   createSupplierSettlement,
 } from "./ledger";
@@ -22,7 +24,9 @@ describe("double-entry ledger", () => {
     createInitialFunding({ organizationSlug: "cantina-labs", amountMinor: 100_000, referenceId: "org", idempotencyKey: "fund" }),
     createAuthorizationHold({ organizationSlug: "cantina-labs", amountMinor: 26, referenceId: "request", idempotencyKey: "hold" }),
     createDeliveredCapture({ organizationSlug: "cantina-labs", authorizedAmountMinor: 26, platformFeeMinor: 2, referenceId: "request", idempotencyKey: "capture" }),
-    createSupplierSettlement({ amountMinor: 24, referenceId: "request", idempotencyKey: "settle" }),
+    createCapture({ organizationSlug: "cantina-labs", captureAmountMinor: 18, platformFeeMinor: 1, referenceId: "request", idempotencyKey: "partial-capture" }),
+    createHoldRelease({ organizationSlug: "cantina-labs", amountMinor: 8, referenceId: "request", idempotencyKey: "release" }),
+    createSupplierSettlement({ amountMinor: 17, referenceId: "request", idempotencyKey: "settle" }),
   ])("balances $type", (draft) => {
     expect(() => assertBalanced(draft.postings)).not.toThrow();
     expect(totals(draft.postings).DEBIT).toBe(totals(draft.postings).CREDIT);

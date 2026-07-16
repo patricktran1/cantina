@@ -23,12 +23,13 @@ export default async function PurchaseResultPage({ params }: { params: Promise<{
         action={<StatusPill status={purchase.status} />}
       />
 
-      <div className="mt-7 grid gap-4 md:grid-cols-4">
+      <div className="mt-7 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
         {[
           ["Selected supplier", purchase.decision.selectedSupplierName ?? "None", ShieldCheck],
           ["Authorized", formatMinorUnits(purchase.authorization?.amountMinor ?? 0), CircleDollarSign],
           ["Expected completion", purchase.quotes.find((quote) => quote.supplierId === purchase.decision.selectedSupplierId)?.estimatedDurationSeconds ? `${purchase.quotes.find((quote) => quote.supplierId === purchase.decision.selectedSupplierId)?.estimatedDurationSeconds}s` : "—", Clock],
           ["Delivery", purchase.verification?.status ?? "Not executed", FileCheck2],
+          ["Clearing scenario", purchase.simulatedOutcome, Gauge],
         ].map(([label, value, Icon]) => {
           const Lucide = Icon as typeof ShieldCheck;
           return (
@@ -137,10 +138,15 @@ export default async function PurchaseResultPage({ params }: { params: Promise<{
             </div>
           </div>
           {purchase.clearing ? (
-            <div className="mt-4 rounded-lg border border-emerald-400/15 bg-emerald-400/[0.05] p-4">
-              <div className="text-sm font-medium text-emerald-200">{purchase.clearing.rationale}</div>
-              <div className="mt-3 grid grid-cols-2 gap-3 text-xs text-zinc-500">
-                <span>Settled: {formatMinorUnits(purchase.clearing.settledAmountMinor)}</span>
+            <div className="mt-4 rounded-lg border border-white/10 bg-white/[0.025] p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-sm font-medium text-zinc-200">{purchase.clearing.rationale}</div>
+                <StatusPill status={purchase.clearing.settlementStatus} />
+              </div>
+              <div className="mt-4 grid grid-cols-2 gap-3 text-xs text-zinc-500 sm:grid-cols-4">
+                <span>Authorized: {formatMinorUnits(purchase.clearing.authorizedAmountMinor)}</span>
+                <span>Captured: {formatMinorUnits(purchase.clearing.settledAmountMinor)}</span>
+                <span>Released: {formatMinorUnits(purchase.clearing.refundedAmountMinor)}</span>
                 <span>Platform fee: {formatMinorUnits(purchase.clearing.platformFeeMinor)}</span>
               </div>
             </div>

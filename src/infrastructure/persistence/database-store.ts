@@ -1,9 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { Prisma } from "@/generated/prisma/client";
-import { executeMockJob, verifyMockDelivery } from "@/domain/execution/mock-executor";
+import { applySimulatedDeliveryOutcome, executeMockJob, verifyMockDelivery } from "@/domain/execution/mock-executor";
+import { createSettlementPlan, type SimulatedDeliveryOutcome } from "@/domain/clearing/settlement-plan";
 import {
   createAuthorizationHold,
-  createDeliveredCapture,
+  createCapture,
+  createHoldRelease,
   createSupplierSettlement,
 } from "@/domain/ledger/ledger";
 import { evaluateRequestAgainstMandate } from "@/domain/procurement/policy-engine";
@@ -128,6 +130,7 @@ function mapPurchase(record: NonNullable<Awaited<ReturnType<typeof purchaseRecor
     minimumReliabilityBps: record.minimumReliabilityBps,
     requireUsDataResidency: record.requireUsDataResidency,
     requireStrongPrivacyControls: record.requireStrongPrivacyControls,
+    simulatedOutcome: record.simulatedOutcome as SimulatedDeliveryOutcome,
     status: record.status,
     createdAt: record.createdAt.toISOString(),
     mandateEvaluation: policy,
@@ -157,7 +160,7 @@ function mapPurchase(record: NonNullable<Awaited<ReturnType<typeof purchaseRecor
       status: record.decision?.status ?? "REJECTED",
     },
     authorization: record.authorization
-      ? { id: record.authorization.id, amountMinor: record.authorization.amountMinor, status: record.authorization.status === "CAPTURED" ? "CAPTURED" : "HELD" }
+      ? { id: record.authorization.id, amountMinor: record.authorization.amountMinor, status: record.authorization.status === "CAPTURED" ? "CAPTURED" : record.authorization.status === "RELEASED" ? "RELEASED" : "HELD" }
       : undefined,
     job: record.job
       ? {
@@ -171,7 +174,7 @@ function mapPurchase(record: NonNullable<Awaited<ReturnType<typeof purchaseRecor
       : undefined,
     verification: evidence
       ? {
-          status: evidence.status === "DISPUTED" ? "FAILED" : evidence.status,
+          status: evidence.status,
           measuredItems: evidence.measuredItems,
           expectedItems: evidence.expectedItems,
           checksumVerified: evidence.checksumVerified,
@@ -208,6 +211,7 @@ export async function createAndRunPurchase(input: ValidatedPurchaseRequest): Pro
     requireUsDataResidency: input.requireUsDataResidency,
     requireStrongPrivacyControls: input.requireStrongPrivacyControls,
     humanApprovalThresholdMinor: input.humanApprovalThresholdMinor,
+    simulatedOutcome: input.simulatedOutcome,
   };
 
   const created = await prisma.purchaseRequest.create({
@@ -225,6 +229,7 @@ export async function createAndRunPurchase(input: ValidatedPurchaseRequest): Pro
       requireUsDataResidency: input.requireUsDataResidency,
       requireStrongPrivacyControls: input.requireStrongPrivacyControls,
       humanApprovalThresholdMinor: input.humanApprovalThresholdMinor,
+      simulatedOutcome: input.simulatedOutcome,
       idempotencyKey: input.idempotencyKey,
     },
   });
@@ -235,7 +240,7 @@ export async function createAndRunPurchase(input: ValidatedPurchaseRequest): Pro
     eventType: "REQUEST_CREATED",
     entityType: "purchase_request",
     entityId: created.id,
-    payload: { taskDescription: created.taskDescription, maximumBudgetMinor: created.maximumBudgetMinor },
+    payload: { taskDescription: created.taskDescription, maximumBudgetMinor: created.maximumBudgetMinor, simulatedOutcome: input.simulatedOutcome },
   });
 
   const mandateEvaluation = evaluateRequestAgainstMandate({
@@ -415,30 +420,36 @@ export async function createAndRunPurchase(input: ValidatedPurchaseRequest): Pro
     payload: { supplierName: selection.selected.supplierName },
   });
 
-  const result = executeMockJob({ taskDescription: input.taskDescription, supplierName: selection.selected.supplierName });
+  const rawResult = executeMockJob({ taskDescription: input.taskDescription, supplierName: selection.selected.supplierName });
+  const result = applySimulatedDeliveryOutcome(rawResult, input.simulatedOutcome);
   await prisma.jobOutput.create({
     data: { jobId: job.id, sequence: 0, content: result.output as never, checksum: result.checksum },
   });
   await prisma.job.update({
     where: { id: job.id },
-    data: { status: "COMPLETED", progressPercent: 100, completedAt: new Date() },
+    data: {
+      status: input.simulatedOutcome === "FAILED" ? "FAILED" : "COMPLETED",
+      progressPercent: 100,
+      completedAt: new Date(),
+      failureReason: input.simulatedOutcome === "FAILED" ? "Simulated supplier execution failure." : null,
+    },
   });
   await prisma.purchaseRequest.update({ where: { id: created.id }, data: { status: "VERIFYING" } });
   await appendAudit(prisma, {
     organizationId: organization.id,
     purchaseRequestId: created.id,
-    eventType: "JOB_COMPLETED",
+    eventType: input.simulatedOutcome === "FAILED" ? "JOB_FAILED" : "JOB_COMPLETED",
     entityType: "job",
     entityId: job.id,
-    payload: { itemCount: result.output.items.length, checksum: result.checksum },
+    payload: { itemCount: result.output.items.length, checksum: result.checksum, simulatedOutcome: input.simulatedOutcome },
   });
 
-  const verification = verifyMockDelivery(result);
+  const verification = verifyMockDelivery(result, { disputed: input.simulatedOutcome === "DISPUTED" });
   await prisma.deliveryEvidence.create({
     data: {
       jobId: job.id,
-      status: verification.status === "VERIFIED" ? "VERIFIED" : verification.status,
-      evidenceType: "mock-output-count-and-checksum",
+      status: verification.status,
+      evidenceType: "mock-output-count-checksum-and-review-flags",
       checks: verification.checks as never,
       measuredItems: verification.measuredItems,
       expectedItems: verification.expectedItems,
@@ -455,53 +466,78 @@ export async function createAndRunPurchase(input: ValidatedPurchaseRequest): Pro
   });
   await prisma.purchaseRequest.update({ where: { id: created.id }, data: { status: "CLEARING" } });
 
-  if (verification.status !== "VERIFIED") {
-    await prisma.purchaseRequest.update({
-      where: { id: created.id },
-      data: { status: verification.status === "PARTIAL" ? "DISPUTED" : "FAILED" },
-    });
-    return mapPurchase((await purchaseRecord(created.id))!);
+  const plan = createSettlementPlan({
+    outcome: input.simulatedOutcome,
+    authorizedAmountMinor: selection.selected.priceMinor,
+    measuredItems: verification.measuredItems,
+    expectedItems: verification.expectedItems,
+  });
+
+  let captureTransactionId: string | undefined;
+  let releaseTransactionId: string | undefined;
+  if (plan.captureAmountMinor > 0) {
+    const capture = await postLedgerTransaction(
+      prisma,
+      createCapture({
+        organizationSlug: organization.slug,
+        captureAmountMinor: plan.captureAmountMinor,
+        platformFeeMinor: plan.platformFeeMinor,
+        referenceId: created.id,
+        idempotencyKey: `purchase:${created.id}:capture`,
+      }),
+    );
+    captureTransactionId = capture.id;
+  }
+  if (plan.releaseAmountMinor > 0) {
+    const release = await postLedgerTransaction(
+      prisma,
+      createHoldRelease({
+        organizationSlug: organization.slug,
+        amountMinor: plan.releaseAmountMinor,
+        referenceId: created.id,
+        idempotencyKey: `purchase:${created.id}:hold-release`,
+      }),
+    );
+    releaseTransactionId = release.id;
+  }
+  if (plan.supplierSettlementMinor > 0) {
+    await postLedgerTransaction(
+      prisma,
+      createSupplierSettlement({
+        amountMinor: plan.supplierSettlementMinor,
+        referenceId: created.id,
+        idempotencyKey: `purchase:${created.id}:supplier-settlement`,
+      }),
+    );
   }
 
-  const platformFeeMinor = Math.max(1, Math.ceil(selection.selected.priceMinor * 0.05));
-  const supplierSettlementMinor = selection.selected.priceMinor - platformFeeMinor;
-  const capture = await postLedgerTransaction(
-    prisma,
-    createDeliveredCapture({
-      organizationSlug: organization.slug,
-      authorizedAmountMinor: selection.selected.priceMinor,
-      platformFeeMinor,
-      referenceId: created.id,
-      idempotencyKey: `purchase:${created.id}:capture`,
-    }),
-  );
-  await postLedgerTransaction(
-    prisma,
-    createSupplierSettlement({
-      amountMinor: supplierSettlementMinor,
-      referenceId: created.id,
-      idempotencyKey: `purchase:${created.id}:supplier-settlement`,
-    }),
-  );
   await prisma.purchaseAuthorization.update({
     where: { id: authorization.id },
-    data: { status: "CAPTURED", captureTransactionId: capture.id },
+    data: {
+      status: plan.authorizationStatus,
+      captureTransactionId,
+      releaseTransactionId,
+    },
   });
   const clearing = await prisma.clearingDecision.create({
     data: {
       purchaseRequestId: created.id,
       supplierId: selection.selected.supplierId,
-      state: "DELIVERED",
-      settlementStatus: "SETTLED",
+      state: plan.state,
+      settlementStatus: plan.settlementStatus,
       authorizedAmountMinor: selection.selected.priceMinor,
-      settledAmountMinor: selection.selected.priceMinor,
-      refundedAmountMinor: 0,
-      platformFeeMinor,
-      rationale: "All expected output items were present and the delivery checksum matched. Full payment released.",
+      settledAmountMinor: plan.captureAmountMinor,
+      refundedAmountMinor: plan.refundedAmountMinor,
+      platformFeeMinor: plan.platformFeeMinor,
+      rationale: plan.rationale,
     },
   });
-  await prisma.purchaseRequest.update({ where: { id: created.id }, data: { status: "SETTLED" } });
-  await prisma.supplier.update({ where: { id: selection.selected.supplierId }, data: { completedJobs: { increment: 1 } } });
+  await prisma.purchaseRequest.update({ where: { id: created.id }, data: { status: plan.finalPurchaseStatus } });
+  if (plan.state === "DELIVERED" || plan.state === "PARTIAL") {
+    await prisma.supplier.update({ where: { id: selection.selected.supplierId }, data: { completedJobs: { increment: 1 } } });
+  } else if (plan.state === "FAILED") {
+    await prisma.supplier.update({ where: { id: selection.selected.supplierId }, data: { failedJobs: { increment: 1 } } });
+  }
   await appendAudit(prisma, {
     organizationId: organization.id,
     purchaseRequestId: created.id,
@@ -512,16 +548,28 @@ export async function createAndRunPurchase(input: ValidatedPurchaseRequest): Pro
       state: clearing.state,
       settlementStatus: clearing.settlementStatus,
       settledAmountMinor: clearing.settledAmountMinor,
-      platformFeeMinor,
+      refundedAmountMinor: clearing.refundedAmountMinor,
+      platformFeeMinor: clearing.platformFeeMinor,
     },
   });
   await appendAudit(prisma, {
     organizationId: organization.id,
     purchaseRequestId: created.id,
-    eventType: "PAYMENT_SETTLED",
+    eventType: plan.state === "DISPUTED"
+      ? "FUNDS_HELD_FOR_REVIEW"
+      : plan.state === "FAILED"
+        ? "AUTHORIZATION_RELEASED"
+        : plan.state === "PARTIAL"
+          ? "PAYMENT_PARTIALLY_SETTLED"
+          : "PAYMENT_SETTLED",
     entityType: "ledger_transaction",
-    entityId: capture.id,
-    payload: { supplierSettlementMinor, platformFeeMinor },
+    entityId: captureTransactionId ?? releaseTransactionId ?? authorization.id,
+    payload: {
+      captureAmountMinor: plan.captureAmountMinor,
+      releaseAmountMinor: plan.releaseAmountMinor,
+      supplierSettlementMinor: plan.supplierSettlementMinor,
+      platformFeeMinor: plan.platformFeeMinor,
+    },
   });
 
   return mapPurchase((await purchaseRecord(created.id))!);

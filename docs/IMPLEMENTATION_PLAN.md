@@ -36,10 +36,11 @@
 
 ## Milestone 3: complete clearing behavior
 
-- [ ] Partial capture and remainder release.
-- [ ] Failed delivery hold release.
+- [x] Partial capture and remainder release.
+- [x] Failed delivery hold release.
 - [ ] Post-capture refund transaction.
-- [ ] Dispute hold and reviewer workflow.
+- [x] Dispute hold and review-queue state.
+- [ ] Reviewer resolution actions.
 - [ ] Reversal transaction support.
 - [ ] Authorization expiry.
 

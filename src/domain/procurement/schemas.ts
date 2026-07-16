@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { resourceCategories } from "./types";
+import { simulatedDeliveryOutcomes } from "@/domain/clearing/settlement-plan";
 
 export const purchaseRequestSchema = z.object({
   taskDescription: z.string().trim().min(10).max(10_000),
@@ -12,6 +13,7 @@ export const purchaseRequestSchema = z.object({
   requireUsDataResidency: z.boolean(),
   requireStrongPrivacyControls: z.boolean(),
   humanApprovalThresholdMinor: z.coerce.number().int().nonnegative().max(100_000_000),
+  simulatedOutcome: z.enum(simulatedDeliveryOutcomes).default("DELIVERED"),
   idempotencyKey: z.string().trim().min(8).max(200),
 });
 
