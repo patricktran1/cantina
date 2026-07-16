@@ -99,7 +99,7 @@ async function bootstrap(): Promise<void> {
       basePriceMinor: 44,
       estimatedDurationSeconds: 100,
     },
-  ] as const;
+  ];
 
   for (const supplierInput of suppliers) {
     const { basePriceMinor, estimatedDurationSeconds, ...supplierData } = supplierInput;
