@@ -1,3 +1,5 @@
+import type { SimulatedDeliveryOutcome } from "@/domain/clearing/settlement-plan";
+
 export const resourceCategories = [
   "INFERENCE",
   "COMPUTE",
@@ -41,6 +43,7 @@ export interface PurchaseRequestInput {
   requireUsDataResidency: boolean;
   requireStrongPrivacyControls: boolean;
   humanApprovalThresholdMinor: number;
+  simulatedOutcome: SimulatedDeliveryOutcome;
 }
 
 export interface SupplierCandidate {

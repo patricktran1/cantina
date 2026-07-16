@@ -28,6 +28,8 @@ The repository contains a tested first vertical slice with:
 - Idempotent simulated authorization, capture, supplier settlement, and initial funding.
 - Double-entry ledger constructors that reject unbalanced postings.
 - Mock workload execution and SHA-256 delivery verification.
+- Complete clearing simulation for `DELIVERED`, `PARTIAL`, `FAILED`, and `DISPUTED` outcomes.
+- Proportional partial capture, unused-hold release, failed-job release, and dispute holds for review.
 - Hash-chained append-only audit events.
 - Dashboard, new request, purchase decision, execution result, transactions, suppliers, mandates, and audit log pages.
 - PostgreSQL/Prisma persistence for Vercel deployments.
@@ -48,8 +50,8 @@ In deployment, Cantina uses managed PostgreSQL through `DATABASE_URL` and persis
 - Authorization holds using simulated credits.
 - Mock workload execution.
 - Output count, content, and checksum verification.
-- `DELIVERED`, `PARTIAL`, `FAILED`, and `DISPUTED` clearing states in the domain model.
-- Full settlement for verified delivery.
+- `DELIVERED`, `PARTIAL`, `FAILED`, and `DISPUTED` clearing states wired end to end.
+- Full settlement, adjusted settlement, hold release, and review holds.
 - Internal double-entry ledger using integer minor units.
 - Audit event sequencing and hash chaining.
 - Read-only supplier and mandate administration views.
@@ -136,7 +138,7 @@ PENDING
 | `FAILED` | Release the hold or refund captured funds. |
 | `DISPUTED` | Keep funds held pending review. |
 
-Only the `DELIVERED` happy path is wired into the current UI workflow. The other states and posting primitives are the next implementation checkpoint.
+All four clearing states are wired into the purchase demo. The form includes an explicit simulation control so each financial path can be exercised and audited without relying on random failures.
 
 ## Double-entry ledger model
 

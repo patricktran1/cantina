@@ -267,6 +267,7 @@ model PurchaseRequest {
   requireUsDataResidency     Boolean               @default(false)
   requireStrongPrivacyControls Boolean             @default(false)
   humanApprovalThresholdMinor Int
+  simulatedOutcome         String                @default("DELIVERED")
   idempotencyKey             String                @unique
   status                     PurchaseRequestStatus @default(CREATED)
   rejectionReasons           Json?

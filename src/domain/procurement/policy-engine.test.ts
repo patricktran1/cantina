@@ -28,6 +28,7 @@ const request: PurchaseRequestInput = {
   requireUsDataResidency: true,
   requireStrongPrivacyControls: false,
   humanApprovalThresholdMinor: 2_500,
+  simulatedOutcome: "DELIVERED",
 };
 
 it("accepts a request inside its mandate", () => {

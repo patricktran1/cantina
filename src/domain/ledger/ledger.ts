@@ -42,6 +42,39 @@ export function createAuthorizationHold(args: {
   };
 }
 
+export function createCapture(args: {
+  organizationSlug: string;
+  captureAmountMinor: number;
+  platformFeeMinor: number;
+  referenceId: string;
+  idempotencyKey: string;
+}): LedgerTransactionDraft {
+  const supplierAmountMinor = args.captureAmountMinor - args.platformFeeMinor;
+  if (supplierAmountMinor <= 0) {
+    throw new Error("Supplier settlement amount must be positive.");
+  }
+  const postings: LedgerPosting[] = [
+    {
+      accountCode: `ORG:${args.organizationSlug}:CUSTOMER_HELD`,
+      direction: "DEBIT",
+      amountMinor: args.captureAmountMinor,
+    },
+    { accountCode: "SYSTEM:SUPPLIER_PAYABLE", direction: "CREDIT", amountMinor: supplierAmountMinor },
+  ];
+  if (args.platformFeeMinor > 0) {
+    postings.push({ accountCode: "SYSTEM:PLATFORM_REVENUE", direction: "CREDIT", amountMinor: args.platformFeeMinor });
+  }
+  return {
+    type: "CAPTURE",
+    idempotencyKey: args.idempotencyKey,
+    referenceType: "purchase_request",
+    referenceId: args.referenceId,
+    description: "Capture held funds after delivery verification.",
+    currency: "USD",
+    postings,
+  };
+}
+
 export function createDeliveredCapture(args: {
   organizationSlug: string;
   authorizedAmountMinor: number;
@@ -49,27 +82,13 @@ export function createDeliveredCapture(args: {
   referenceId: string;
   idempotencyKey: string;
 }): LedgerTransactionDraft {
-  const supplierAmountMinor = args.authorizedAmountMinor - args.platformFeeMinor;
-  if (supplierAmountMinor <= 0) {
-    throw new Error("Supplier settlement amount must be positive.");
-  }
-  return {
-    type: "CAPTURE",
-    idempotencyKey: args.idempotencyKey,
-    referenceType: "purchase_request",
+  return createCapture({
+    organizationSlug: args.organizationSlug,
+    captureAmountMinor: args.authorizedAmountMinor,
+    platformFeeMinor: args.platformFeeMinor,
     referenceId: args.referenceId,
-    description: "Capture held funds after verified delivery.",
-    currency: "USD",
-    postings: [
-      {
-        accountCode: `ORG:${args.organizationSlug}:CUSTOMER_HELD`,
-        direction: "DEBIT",
-        amountMinor: args.authorizedAmountMinor,
-      },
-      { accountCode: "SYSTEM:SUPPLIER_PAYABLE", direction: "CREDIT", amountMinor: supplierAmountMinor },
-      { accountCode: "SYSTEM:PLATFORM_REVENUE", direction: "CREDIT", amountMinor: args.platformFeeMinor },
-    ],
-  };
+    idempotencyKey: args.idempotencyKey,
+  });
 }
 
 export function createSupplierSettlement(args: {

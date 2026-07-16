@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { SimulatedDeliveryOutcome } from "@/domain/clearing/settlement-plan";
 
 export interface MockJobResult {
   output: {
@@ -8,6 +9,18 @@ export interface MockJobResult {
   };
   checksum: string;
   expectedItems: number;
+}
+
+export interface DeliveryVerification {
+  status: "VERIFIED" | "PARTIAL" | "FAILED" | "DISPUTED";
+  measuredItems: number;
+  expectedItems: number;
+  checksumVerified: boolean;
+  checks: Record<string, boolean>;
+}
+
+function checksum(output: MockJobResult["output"]): string {
+  return createHash("sha256").update(JSON.stringify(output)).digest("hex");
 }
 
 export function inferRequestedItemCount(taskDescription: string): number {
@@ -28,32 +41,48 @@ export function executeMockJob(args: { taskDescription: string; supplierName: st
     supplier: args.supplierName,
     generatedAt: new Date().toISOString(),
   };
-  const checksum = createHash("sha256").update(JSON.stringify(output)).digest("hex");
-  return { output, checksum, expectedItems };
+  return { output, checksum: checksum(output), expectedItems };
 }
 
-export function verifyMockDelivery(result: MockJobResult): {
-  status: "VERIFIED" | "PARTIAL" | "FAILED";
-  measuredItems: number;
-  expectedItems: number;
-  checksumVerified: boolean;
-  checks: Record<string, boolean>;
-} {
-  const recalculated = createHash("sha256").update(JSON.stringify(result.output)).digest("hex");
+export function applySimulatedDeliveryOutcome(
+  result: MockJobResult,
+  outcome: SimulatedDeliveryOutcome,
+): MockJobResult {
+  if (outcome === "DELIVERED" || outcome === "DISPUTED") return result;
+
+  const items = outcome === "FAILED"
+    ? []
+    : result.output.items.slice(0, Math.max(1, Math.floor(result.expectedItems * 0.7)));
+  const output = { ...result.output, items };
+  return { ...result, output, checksum: checksum(output) };
+}
+
+export function verifyMockDelivery(
+  result: MockJobResult,
+  options: { disputed?: boolean } = {},
+): DeliveryVerification {
+  const recalculated = checksum(result.output);
   const checksumVerified = recalculated === result.checksum;
   const measuredItems = result.output.items.length;
   const countComplete = measuredItems === result.expectedItems;
   const hasContent = result.output.items.every((item) => item.description.trim().length > 0);
-  const status = checksumVerified && countComplete && hasContent
-    ? "VERIFIED"
-    : measuredItems > 0
-      ? "PARTIAL"
-      : "FAILED";
+  const status: DeliveryVerification["status"] = options.disputed
+    ? "DISPUTED"
+    : checksumVerified && countComplete && hasContent
+      ? "VERIFIED"
+      : measuredItems > 0
+        ? "PARTIAL"
+        : "FAILED";
   return {
     status,
     measuredItems,
     expectedItems: result.expectedItems,
     checksumVerified,
-    checks: { checksumVerified, countComplete, hasContent },
+    checks: {
+      checksumVerified,
+      countComplete,
+      hasContent,
+      manualReviewRequired: Boolean(options.disputed),
+    },
   };
 }

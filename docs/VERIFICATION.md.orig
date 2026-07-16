@@ -25,17 +25,3 @@ The production build contains dynamic routes for the dashboard, purchasing API, 
 ## External boundary not yet verified
 
 A live Vercel deployment and live managed PostgreSQL connection have not been provisioned from this environment. The database-backed path should be accepted after the checklist in `docs/VERCEL_DEPLOYMENT.md` passes against the connected Vercel database.
-
-## Complete clearing milestone
-
-Verified after adding all four clearing outcomes:
-
-- `npm run lint` passes.
-- `npm test` passes with 23 tests across 6 files.
-- `npx tsc --noEmit` passes.
-- `npm run build` passes.
-- HTTP smoke tests pass for `DELIVERED`, `PARTIAL`, `FAILED`, and `DISPUTED`.
-- Partial delivery captures 18 cents and releases 8 cents from a 26-cent authorization.
-- Failed delivery releases the full 26-cent hold.
-- Disputed delivery leaves the 26-cent authorization held for review.
-

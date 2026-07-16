@@ -26,6 +26,7 @@ export function PurchaseRequestForm() {
       requireUsDataResidency: formData.get("requireUsDataResidency") === "on",
       requireStrongPrivacyControls: formData.get("requireStrongPrivacyControls") === "on",
       humanApprovalThresholdMinor: Math.round(Number(formData.get("humanApprovalThresholdDollars")) * 100),
+      simulatedOutcome: String(formData.get("simulatedOutcome")),
       idempotencyKey: crypto.randomUUID(),
     };
 
@@ -115,6 +116,15 @@ export function PurchaseRequestForm() {
             <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-sm text-zinc-600">$</span>
             <input name="humanApprovalThresholdDollars" type="number" min="0" step="0.01" defaultValue="25.00" className={`${fieldClass} pl-7`} required />
           </div>
+        </label>
+        <label className={`${labelClass} mt-5 block`}>Simulated delivery outcome
+          <select name="simulatedOutcome" defaultValue="DELIVERED" className={fieldClass}>
+            <option value="DELIVERED">Delivered · full settlement</option>
+            <option value="PARTIAL">Partial · adjusted settlement</option>
+            <option value="FAILED">Failed · release funds</option>
+            <option value="DISPUTED">Disputed · hold for review</option>
+          </select>
+          <span className="mt-2 block text-[11px] normal-case tracking-normal text-zinc-600">Demo control for exercising Cantina&apos;s clearing state machine.</span>
         </label>
         <div className="mt-6 space-y-3 text-sm text-zinc-300">
           <label className="flex items-start gap-3">
