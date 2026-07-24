@@ -81,7 +81,7 @@ jobs:
     name: Critical procurement browser flow
     needs: validate
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
 
     steps:
       - name: Check out repository
@@ -95,10 +95,13 @@ jobs:
       - name: Install dependencies
         run: npm install --no-audit --no-fund
 
+      - name: Build production application
+        run: npm run build
+
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 
-      - name: Run Playwright critical flow
+      - name: Run Playwright against production server
         run: npm run test:e2e
 
       - name: Upload browser evidence
