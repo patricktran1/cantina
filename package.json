@@ -37,17 +37,17 @@
   "devDependencies": {
     "@playwright/test": "^1.61.1",
     "@tailwindcss/postcss": "^4",
-    "@types/node": "^20",
+    "@types/node": "^26",
     "@types/pg": "^8.20.0",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "@vitest/coverage-v8": "^4.1.10",
-    "eslint": "^9",
-    "eslint-config-next": "16.2.11",
+    "@vitest/coverage-v8": "^5.0.2",
+    "eslint": "^10",
+    "eslint-config-next": "16.3.6",
     "tailwindcss": "^4",
     "tsx": "^4.23.1",
-    "typescript": "^5",
-    "vitest": "^4.1.10"
+    "typescript": "^7",
+    "vitest": "^5.0.2"
   },
   "type": "module",
   "overrides": {
